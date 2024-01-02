@@ -58,6 +58,10 @@ func (r *QueryResult) Next() bool {
 	return r.rows.Next()
 }
 
+func (r *QueryResult) GetRows() *sql.Rows {
+	return r.rows
+}
+
 func (r *QueryResult) GetError() (err error) {
 	return r.err
 }
