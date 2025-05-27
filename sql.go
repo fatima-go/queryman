@@ -210,10 +210,7 @@ func doExecWithNestedList(sqlProxy SqlProxy, stmt QueryStatement, args []interfa
 
 		if sqlProxy.debugEnabled() {
 			var buffer bytes.Buffer
-			buffer.WriteString(fmt.Sprintf("[%s] params : ", stmt.Id))
-			for _, v := range passing {
-				buffer.WriteString(fmt.Sprintf("[%v] ", v))
-			}
+			buffer.WriteString(DebugPrintParams(stmt.Id, passing))
 			sqlProxy.debugPrint("%s", buffer.String())
 		}
 
@@ -288,10 +285,7 @@ func doExecWithNestedMap(sqlProxy SqlProxy, stmt QueryStatement, args []interfac
 
 		if sqlProxy.debugEnabled() {
 			var buffer bytes.Buffer
-			buffer.WriteString(fmt.Sprintf("[%s] params : ", stmt.Id))
-			for _, v := range param {
-				buffer.WriteString(fmt.Sprintf("[%v] ", v))
-			}
+			buffer.WriteString(DebugPrintParams(stmt.Id, param))
 			sqlProxy.debugPrint("%s", buffer.String())
 		}
 
@@ -364,10 +358,7 @@ func doExecWithStructList(sqlProxy SqlProxy, stmt QueryStatement, args []interfa
 
 		if sqlProxy.debugEnabled() {
 			var buffer bytes.Buffer
-			buffer.WriteString(fmt.Sprintf("[%s] params : ", stmt.Id))
-			for _, v := range param {
-				buffer.WriteString(fmt.Sprintf("[%v] ", v))
-			}
+			buffer.WriteString(DebugPrintParams(stmt.Id, param))
 			sqlProxy.debugPrint("%s", buffer.String())
 		}
 
