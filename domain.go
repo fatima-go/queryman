@@ -25,6 +25,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -214,9 +215,29 @@ func (stmt QueryStatement) clone() QueryStatement {
 func (stmt QueryStatement) Debug(param ...interface{}) string {
 	var buffer bytes.Buffer
 	buffer.WriteString(fmt.Sprintf("[%s] %s", stmt.Id, stmt.Query))
-	if len(param) > 0 {
-		buffer.WriteString(fmt.Sprintf("\n[%s] params : ", stmt.Id))
-		for _, v := range param {
+	debugParam := DebugPrintParams(stmt.Id, param)
+	if len(debugParam) > 0 {
+		buffer.WriteString(debugParam)
+	}
+	return buffer.String()
+}
+
+func DebugPrintParams(id string, params []interface{}) string {
+	if len(params) == 0 {
+		return ""
+	}
+
+	var buffer bytes.Buffer
+	buffer.WriteString(fmt.Sprintf("\n[%s] params : ", id))
+	for _, v := range params {
+		switch reflect.TypeOf(v).Kind() {
+		case reflect.Ptr:
+			if reflect.ValueOf(v).IsNil() {
+				buffer.WriteString("[nil] ")
+				break
+			}
+			buffer.WriteString(fmt.Sprintf("[%v] ", reflect.ValueOf(v).Elem().Interface()))
+		default:
 			buffer.WriteString(fmt.Sprintf("[%v] ", v))
 		}
 	}
