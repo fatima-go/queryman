@@ -21,16 +21,20 @@
 package queryman
 
 import (
+	"context"
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 )
 
 type Bulk interface {
 	AddBatch(params ...interface{}) error
 	Execute() (sql.Result, error)
+	// ExecuteContext Execute의 context 전달 변형
+	ExecuteContext(ctx context.Context) (sql.Result, error)
 }
 
 func newQuerymanBulk(sqlProxy SqlProxy, stmt QueryStatement) *querymanBulk {
@@ -96,8 +100,12 @@ func (b *querymanBulk) AddBatch(params ...interface{}) (err error) {
 }
 
 func (b *querymanBulk) Execute() (sql.Result, error) {
+	return b.ExecuteContext(context.Background())
+}
+
+func (b *querymanBulk) ExecuteContext(ctx context.Context) (sql.Result, error) {
 	if b.stmt.eleType == eleTypeInsert {
-		return b.executeInsert()
+		return b.executeInsert(ctx)
 	} else if b.stmt.eleType == eleTypeUpdate {
 		return b.executeUpdate()
 	}
@@ -105,10 +113,12 @@ func (b *querymanBulk) Execute() (sql.Result, error) {
 	return nil, fmt.Errorf("only support insert/update")
 }
 
-func (b *querymanBulk) executeInsert() (sql.Result, error) {
+func (b *querymanBulk) executeInsert(ctx context.Context) (sql.Result, error) {
 	bulkInsertQuery := findValuesClauseInInsert(b.stmt.Query)
 	sql := bulkInsertQuery.buildMultiValueQuery(b.execCount)
-	return b.sqlProxy.exec(sql, b.params...)
+	start := time.Now()
+	res, err := b.sqlProxy.execContext(ctx, sql, b.params...)
+	return res, wrapQueryError(b.stmt.Id, "exec", start, err)
 }
 
 func (b *querymanBulk) executeUpdate() (sql.Result, error) {

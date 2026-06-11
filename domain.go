@@ -22,6 +22,7 @@ package queryman
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -88,8 +89,10 @@ var (
 	ErrQueryInsufficientParameter = errors.New("insufficient query parameter for select result")
 	ErrQueryNeedsPtrParameter     = errors.New("when you select in query, you have to pass parameter as ptr")
 	ErrNilPtr                     = errors.New("destination pointer is nil")
-	ErrNoRows                     = errors.New("sql: no rows in result set")
-	ErrNoInsertId                 = errors.New("sql: no insert id")
+	// ErrNoRows sql.ErrNoRows 별칭. errors.Is(err, sql.ErrNoRows) 호환과 기존
+	// err == queryman.ErrNoRows 비교를 동시에 만족한다 (메시지 문자열 동일).
+	ErrNoRows     = sql.ErrNoRows
+	ErrNoInsertId = errors.New("sql: no insert id")
 )
 
 type SqlProxy interface {
@@ -97,6 +100,9 @@ type SqlProxy interface {
 	query(query string, args ...interface{}) (*sql.Rows, error)
 	queryRow(query string, args ...interface{}) *sql.Row
 	prepare(query string) (*sql.Stmt, error)
+	execContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+	queryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
+	prepareContext(ctx context.Context, query string) (*sql.Stmt, error)
 	isTransaction() bool
 	SqlDebugger
 }
@@ -112,10 +118,11 @@ type QueryStatementFinder interface {
 }
 
 type QueryStatement struct {
-	eleType       declareElementType
-	Id            string     `xml:"id,attr"`
-	Query         string     `xml:",cdata"`
-	clause        []IfClause `xml:"if"`
+	eleType declareElementType
+	Id      string `xml:"id,attr"`
+	Query   string `xml:",cdata"`
+	// clause 는 loader가 <if> 토큰을 수동 파싱하여 appendIf로 채운다(encoding/xml 미사용)
+	clause        []IfClause
 	columnMention []ColumnBind
 	HoldedQuery   string
 }

@@ -25,6 +25,7 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"reflect"
+	"time"
 )
 
 type QueryResult struct {
@@ -32,6 +33,8 @@ type QueryResult struct {
 	err                error
 	rows               *sql.Rows
 	fieldNameConverter FieldNameConvertStrategy
+	stmtId             string    // rows 단계 에러 래핑용 컨텍스트
+	start              time.Time // rows 단계 에러 래핑용 실행 시작 시각
 }
 
 func newQueryResultError(err error) *QueryResult {
@@ -40,21 +43,25 @@ func newQueryResultError(err error) *QueryResult {
 	return queryResult
 }
 
-func newQueryResult(stmt *sql.Stmt, rows *sql.Rows) *QueryResult {
+func newQueryResult(stmt *sql.Stmt, rows *sql.Rows, stmtId string, start time.Time) *QueryResult {
 	queryResult := &QueryResult{}
 	queryResult.pstmt = stmt
 	queryResult.rows = rows
+	queryResult.stmtId = stmtId
+	queryResult.start = start
 	return queryResult
 }
 
-//func newQueryResult(stmt *sql.Stmt, rows *sql.Rows) *QueryResult {
-//	queryResult := &QueryResult{}
-//	queryResult.pstmt = stmt
-//	queryResult.rows = rows
-//	return queryResult
-//}
+// wrapRows rows 반복 단계에서 발생한 에러에 쿼리 컨텍스트를 부여한다.
+func (r *QueryResult) wrapRows(err error) error {
+	return wrapQueryError(r.stmtId, "query", r.start, err)
+}
 
 func (r *QueryResult) Next() bool {
+	// 에러 상태(rows == nil)에서는 nil 포인터 패닉을 방지하기 위해 false 반환
+	if r.err != nil || r.rows == nil {
+		return false
+	}
 	return r.rows.Next()
 }
 
@@ -68,11 +75,11 @@ func (r *QueryResult) GetError() (err error) {
 
 func (r *QueryResult) Scan(v ...interface{}) (err error) {
 	if r.err != nil {
-		return err
+		return r.err
 	}
 
 	if r.rows.Err() != nil {
-		return r.rows.Err()
+		return r.wrapRows(r.rows.Err())
 	}
 
 	defer func() {
@@ -105,22 +112,22 @@ func (r *QueryResult) Scan(v ...interface{}) (err error) {
 		}
 	}
 
-	return r.rows.Scan(v...)
+	return r.wrapRows(r.rows.Scan(v...))
 }
 
 func (r *QueryResult) scanToStruct(val *reflect.Value) error {
 	if r.rows.Err() != nil {
-		return r.rows.Err()
+		return r.wrapRows(r.rows.Err())
 	}
 
 	columns, err := r.rows.Columns()
 	if err != nil {
-		return err
+		return r.wrapRows(err)
 	}
 
 	ss := newStructureScanner(r.fieldNameConverter, columns, val)
 
-	return r.rows.Scan(ss.cloneScannerList()...)
+	return r.wrapRows(r.rows.Scan(ss.cloneScannerList()...))
 }
 
 func (r *QueryResult) Close() error {
@@ -133,7 +140,7 @@ func (r *QueryResult) Close() error {
 	}()
 
 	if r.rows != nil {
-		return r.rows.Close()
+		return r.wrapRows(r.rows.Close())
 	}
 
 	return nil
@@ -145,6 +152,8 @@ type QueryRowResult struct {
 	err                error
 	rows               *sql.Rows
 	fieldNameConverter FieldNameConvertStrategy
+	stmtId             string    // rows 단계 에러 래핑용 컨텍스트
+	start              time.Time // rows 단계 에러 래핑용 실행 시작 시각
 }
 
 func newQueryRowResultError(err error) *QueryRowResult {
@@ -153,12 +162,19 @@ func newQueryRowResultError(err error) *QueryRowResult {
 	return queryResult
 }
 
-func newQueryRowResult(stmt *sql.Stmt, rows *sql.Rows) *QueryRowResult {
+func newQueryRowResult(stmt *sql.Stmt, rows *sql.Rows, stmtId string, start time.Time) *QueryRowResult {
 	queryResult := &QueryRowResult{}
 	queryResult.pstmt = stmt
 	queryResult.rows = rows
 	queryResult.transaction = false
+	queryResult.stmtId = stmtId
+	queryResult.start = start
 	return queryResult
+}
+
+// wrapRows rows 반복 단계에서 발생한 에러에 쿼리 컨텍스트를 부여한다.
+func (r *QueryRowResult) wrapRows(err error) error {
+	return wrapQueryError(r.stmtId, "query", r.start, err)
 }
 
 func (r *QueryRowResult) SetTransaction() {
@@ -188,12 +204,12 @@ func (r *QueryRowResult) Scan(v ...interface{}) (err error) {
 	}
 
 	if r.rows.Err() != nil {
-		return r.rows.Err()
+		return r.wrapRows(r.rows.Err())
 	}
 
 	if !r.rows.Next() {
 		if err := r.rows.Err(); err != nil {
-			return err
+			return r.wrapRows(err)
 		}
 		return ErrNoRows
 	}
@@ -222,18 +238,18 @@ func (r *QueryRowResult) Scan(v ...interface{}) (err error) {
 		}
 	}
 
-	return r.rows.Scan(v...)
+	return r.wrapRows(r.rows.Scan(v...))
 }
 
 func (r *QueryRowResult) scanToStruct(val *reflect.Value) error {
 	columns, err := r.rows.Columns()
 	if err != nil {
-		return err
+		return r.wrapRows(err)
 	}
 
 	ss := newStructureScanner(r.fieldNameConverter, columns, val)
 
-	return r.rows.Scan(ss.cloneScannerList()...)
+	return r.wrapRows(r.rows.Scan(ss.cloneScannerList()...))
 }
 
 type ExecMultiResult struct {

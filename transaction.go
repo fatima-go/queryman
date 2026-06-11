@@ -21,6 +21,7 @@
 package queryman
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"runtime"
@@ -58,11 +59,11 @@ func newTransaction(debugger SqlDebugger, tx *sql.Tx, queryFinder QueryStatement
 }
 
 func (t *DBTransaction) exec(query string, args ...interface{}) (sql.Result, error) {
-	return t.tx.Exec(query, args...)
+	return t.execContext(context.Background(), query, args...)
 }
 
 func (t *DBTransaction) query(query string, args ...interface{}) (*sql.Rows, error) {
-	return t.tx.Query(query, args...)
+	return t.queryContext(context.Background(), query, args...)
 }
 
 func (t *DBTransaction) queryRow(query string, args ...interface{}) *sql.Row {
@@ -70,7 +71,19 @@ func (t *DBTransaction) queryRow(query string, args ...interface{}) *sql.Row {
 }
 
 func (t *DBTransaction) prepare(query string) (*sql.Stmt, error) {
-	return t.tx.Prepare(query)
+	return t.prepareContext(context.Background(), query)
+}
+
+func (t *DBTransaction) execContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+	return t.tx.ExecContext(ctx, query, args...)
+}
+
+func (t *DBTransaction) queryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+	return t.tx.QueryContext(ctx, query, args...)
+}
+
+func (t *DBTransaction) prepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
+	return t.tx.PrepareContext(ctx, query)
 }
 
 func (t *DBTransaction) isTransaction() bool {
@@ -170,7 +183,79 @@ func (t *DBTransaction) QueryRowWithStmt(id string, v ...interface{}) *QueryRowR
 	if queryResult.err != nil {
 		queryRowResult = newQueryRowResultError(queryResult.err)
 	} else {
-		queryRowResult = newQueryRowResult(queryResult.pstmt, queryResult.rows)
+		queryRowResult = newQueryRowResult(queryResult.pstmt, queryResult.rows, queryResult.stmtId, queryResult.start)
+	}
+
+	queryResult.pstmt = nil
+	queryResult.rows = nil
+	queryRowResult.fieldNameConverter = t.fieldNameConverter
+	queryRowResult.SetTransaction()
+	return queryRowResult
+}
+
+// ExecuteContext Execute의 context 전달 변형
+func (t *DBTransaction) ExecuteContext(ctx context.Context, v ...interface{}) (sql.Result, error) {
+	pc, _, _, _ := runtime.Caller(1)
+	funcName := findFunctionName(pc)
+	return t.ExecuteWithStmtContext(ctx, funcName, v...)
+}
+
+func (t *DBTransaction) ExecuteWithStmtContext(ctx context.Context, id string, v ...interface{}) (sql.Result, error) {
+	stmt, err := t.queryFinder.find(id)
+	if err != nil {
+		return nil, err
+	}
+
+	if stmt.eleType != eleTypeInsert && stmt.eleType != eleTypeUpdate {
+		return nil, ErrExecutionInvalidSqlType
+	}
+
+	return execute(newContextBoundProxy(t, ctx), stmt, v...)
+}
+
+func (t *DBTransaction) QueryContext(ctx context.Context, v ...interface{}) *QueryResult {
+	pc, _, _, _ := runtime.Caller(1)
+	funcName := findFunctionName(pc)
+	return t.QueryWithStmtContext(ctx, funcName, v...)
+}
+
+func (t *DBTransaction) QueryWithStmtContext(ctx context.Context, id string, v ...interface{}) *QueryResult {
+	stmt, err := t.queryFinder.find(id)
+	if err != nil {
+		return newQueryResultError(err)
+	}
+
+	if stmt.eleType != eleTypeSelect {
+		return newQueryResultError(ErrQueryInvalidSqlType)
+	}
+
+	queryedRow := queryMultiRow(newContextBoundProxy(t, ctx), stmt, v...)
+	queryedRow.fieldNameConverter = t.fieldNameConverter
+	return queryedRow
+}
+
+func (t *DBTransaction) QueryRowContext(ctx context.Context, v ...interface{}) *QueryRowResult {
+	pc, _, _, _ := runtime.Caller(1)
+	funcName := findFunctionName(pc)
+	return t.QueryRowWithStmtContext(ctx, funcName, v...)
+}
+
+func (t *DBTransaction) QueryRowWithStmtContext(ctx context.Context, id string, v ...interface{}) *QueryRowResult {
+	stmt, err := t.queryFinder.find(id)
+	if err != nil {
+		return newQueryRowResultError(err)
+	}
+
+	if stmt.eleType != eleTypeSelect {
+		return newQueryRowResultError(ErrQueryInvalidSqlType)
+	}
+
+	var queryRowResult *QueryRowResult
+	queryResult := queryMultiRow(newContextBoundProxy(t, ctx), stmt, v...)
+	if queryResult.err != nil {
+		queryRowResult = newQueryRowResultError(queryResult.err)
+	} else {
+		queryRowResult = newQueryRowResult(queryResult.pstmt, queryResult.rows, queryResult.stmtId, queryResult.start)
 	}
 
 	queryResult.pstmt = nil

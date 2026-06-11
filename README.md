@@ -604,3 +604,70 @@ func (myCustomLogger) Printf(format string, a ...interface{}) {
 
 
 
+# Error handling and timeouts
+
+queryman wraps every error that originates from a DB round-trip in a
+`*QueryError` that carries the statement id, operation and elapsed time:
+
+```
+[selectTrackMeta] query failed after 30.001s: invalid connection
+```
+
+The original driver error is preserved through `Unwrap()`, so `errors.Is` /
+`errors.As` keep working:
+
+```go
+result := man.QueryRowWithStmt("selectTrackMeta", id)
+if err := result.Scan(&meta); err != nil {
+    if qe, ok := queryman.AsQueryError(err); ok {
+        log.Errorf("stmt=%s op=%s elapsed=%s: %v", qe.StmtId, qe.Op, qe.Elapsed, qe.Err)
+    }
+    if queryman.IsConnError(err) { /* 연결 계열 장애 */ }
+    if queryman.IsTimeout(err)   { /* 확정적 timeout */ }
+}
+```
+
+## Classification matrix
+
+| situation | `IsConnError` | `IsTimeout` |
+|---|---|---|
+| DSN `readTimeout`/`writeTimeout` exceeded | true | **false** |
+| connection refused / unreachable | true | false |
+| DSN `timeout` (dial) exceeded | true | true |
+| `context` deadline exceeded | false | true |
+| server killed / network reset | true | false |
+
+`IsTimeout` is intentionally **false** for DSN `readTimeout`: the driver discards
+the underlying cause and returns only `invalid connection`. Use the elapsed time
+in `QueryError` (≈ the configured `readTimeout`) as a strong hint, or use the
+context API below for a definitive answer.
+
+## Context API for definitive timeouts
+
+Every execution API has a `*Context` variant (existing methods are unchanged and
+delegate to `context.Background()`):
+
+```go
+ctx, cancel := context.WithTimeout(ctx, 25*time.Second) // < DSN readTimeout
+defer cancel()
+result := man.QueryRowWithStmtContext(ctx, "selectTrackMeta", id)
+// errors.Is(err, context.DeadlineExceeded) == true, IsTimeout(err) == true
+```
+
+Note: a `context` timeout still closes the connection (MySQL aborts an in-flight
+query by dropping the connection), so connection-pool churn is the same as the
+DSN `readTimeout` path. The benefit of the context API is **error
+classification**, not connection preservation.
+
+## Observability: driver logger
+
+The driver logs the real cause it discards (`read tcp ...: i/o timeout`) to its
+internal logger only. Connect it to your service logger to see it in the same
+stream:
+
+```go
+queryman.SetDriverLogger(myMysqlLogger) // delegates to mysql.SetLogger
+```
+
+This is a global (per-driver) setting and correlates with a specific query only
+by time proximity, so treat it as an auxiliary observability aid.

@@ -246,7 +246,7 @@ func TestDDL(t *testing.T) {
 
 	err := dropAndCreateTable()
 	if err != nil {
-		t.Errorf(err.Error())
+		t.Error(err.Error())
 		return
 	}
 
@@ -300,13 +300,11 @@ func createAlbumTable() error {
 func setup() {
 	if querymanStatus < statusReady {
 		panic("querymanager is not ready")
-		return
 	}
 
 	err := dropAndCreateTable()
 	if err != nil {
 		panic(fmt.Sprintf("%s", err.Error()))
-		return
 	}
 }
 
@@ -986,7 +984,7 @@ func TestQueryBare(t *testing.T) {
 	sample := HasUnexportedFieldCity{Name: "unexported_field"}
 	result := queryManager.QueryWithStmt(sqlSelectCityWithName, sample)
 	if result.GetError() != nil {
-		t.Errorf(result.GetError().Error())
+		t.Error(result.GetError().Error())
 		return
 	}
 
@@ -1024,7 +1022,7 @@ func TestQueryWithMap(t *testing.T) {
 	m["Name"] = "map_name"
 	result := queryManager.QueryWithStmt(sqlSelectCityWithName, m)
 	if result.GetError() != nil {
-		t.Errorf(result.GetError().Error())
+		t.Error(result.GetError().Error())
 		return
 	}
 
@@ -1071,7 +1069,7 @@ func TestQueryNullAndSkipSetting(t *testing.T) {
 	city := NullableCity{}
 	result := queryManager.QueryWithStmt(sqlSelectCityWithName, "nullable")
 	if result.GetError() != nil {
-		t.Errorf(result.GetError().Error())
+		t.Error(result.GetError().Error())
 		return
 	}
 
@@ -1112,7 +1110,7 @@ func TestQueryNullScanning(t *testing.T) {
 	city := NullableCity{}
 	result := queryManager.QueryWithStmt(sqlSelectCityWithName, "%null%")
 	if result.GetError() != nil {
-		t.Errorf(result.GetError().Error())
+		t.Error(result.GetError().Error())
 		return
 	}
 
@@ -1163,7 +1161,7 @@ func TestSelectCityWithIf(t *testing.T) {
 	m["Name"] = "map_name"
 	err = queryManager.QueryRowWithStmt(sqlSelectCityWithIf, m).Scan(&city)
 	if err != nil {
-		t.Fatalf(err.Error())
+		t.Fatal(err.Error())
 	}
 	if !(city.Age.Valid && city.Age.Int64 == 42) {
 		t.Fatalf("invalid age")
@@ -1172,7 +1170,7 @@ func TestSelectCityWithIf(t *testing.T) {
 	m["Age"] = 42
 	err = queryManager.QueryRowWithStmt(sqlSelectCityWithIf, m).Scan(&city)
 	if err != nil {
-		t.Fatalf(err.Error())
+		t.Fatal(err.Error())
 	}
 	if !(city.Age.Valid && city.Age.Int64 == 42) {
 		t.Fatalf("invalid age")

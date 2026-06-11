@@ -4,3 +4,10 @@
 *.swp
 .Spotlight-V100
 .Trashes
+/AGENTS.md
+/CLAUDE.md
+/.github/copilot-instructions.md
+/.agents/
+/.antigravitycli/
+/.claude/
+/.codex/

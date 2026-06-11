@@ -40,7 +40,9 @@ func execute(sqlProxy SqlProxy, stmt QueryStatement, v ...interface{}) (result s
 		if sqlProxy.debugEnabled() {
 			sqlProxy.debugPrint("%s", stmt.Debug())
 		}
-		return sqlProxy.exec(execStmt.Query)
+		start := time.Now()
+		res, execErr := sqlProxy.exec(execStmt.Query)
+		return res, wrapQueryError(stmt.Id, "exec", start, execErr)
 	}
 
 	defer func() {
@@ -115,7 +117,9 @@ func execWithMap(sqlProxy SqlProxy, stmt QueryStatement, m map[string]interface{
 		sqlProxy.debugPrint("%s", stmt.Debug(param...))
 	}
 
-	return sqlProxy.exec(effectiveQuery, param...)
+	start := time.Now()
+	res, execErr := sqlProxy.exec(effectiveQuery, param...)
+	return res, wrapQueryError(stmt.Id, "exec", start, execErr)
 }
 
 func execWithList(sqlProxy SqlProxy, stmt QueryStatement, args []interface{}) (sql.Result, error) {
@@ -143,7 +147,8 @@ func execWithList(sqlProxy SqlProxy, stmt QueryStatement, args []interface{}) (s
 			sqlProxy.recordExcution(stmt.Id, start)
 		}()
 
-		return sqlProxy.exec(effectiveQuery, param...)
+		res, execErr := sqlProxy.exec(effectiveQuery, param...)
+		return res, wrapQueryError(stmt.Id, "exec", start, execErr)
 	}
 
 	// check nested list
@@ -170,19 +175,12 @@ func execWithList(sqlProxy SqlProxy, stmt QueryStatement, args []interface{}) (s
 	defer func() {
 		sqlProxy.recordExcution(stmt.Id, start)
 	}()
-	return sqlProxy.exec(stmt.Query, args...)
+	res, execErr := sqlProxy.exec(stmt.Query, args...)
+	return res, wrapQueryError(stmt.Id, "exec", start, execErr)
 }
 
 func execWithNestedList(sqlProxy SqlProxy, stmt QueryStatement, args []interface{}) (sql.Result, error) {
-	executed, result, err := doExecWithNestedList(sqlProxy, stmt, args)
-	if err != nil && err == driver.ErrBadConn {
-		var nextResult ExecMultiResult
-		_, nextResult, err = doExecWithNestedList(sqlProxy, stmt, args[executed:])
-		if err == nil {
-			result.idList = append(result.idList, nextResult.idList...)
-			result.rowAffected += nextResult.rowAffected
-		}
-	}
+	_, result, err := doExecWithNestedList(sqlProxy, stmt, args)
 	return result, err
 }
 
@@ -197,9 +195,10 @@ func doExecWithNestedList(sqlProxy SqlProxy, stmt QueryStatement, args []interfa
 		}
 	}
 
+	prepareStart := time.Now()
 	pstmt, err := sqlProxy.prepare(stmt.Query)
 	if err != nil {
-		return 0, ExecMultiResult{}, err
+		return 0, ExecMultiResult{}, wrapQueryError(stmt.Id, "prepare", prepareStart, err)
 	}
 	defer pstmt.Close()
 
@@ -215,9 +214,9 @@ func doExecWithNestedList(sqlProxy SqlProxy, stmt QueryStatement, args []interfa
 		}
 
 		start := time.Now()
-		res, err := pstmt.Exec(passing...)
+		res, err := pstmt.ExecContext(proxyContext(sqlProxy), passing...)
 		if err != nil {
-			return i, result, err
+			return i, result, wrapQueryError(stmt.Id, "exec", start, err)
 		}
 		sqlProxy.recordExcution(stmt.Id, start)
 		affectedCount, _ := res.RowsAffected()
@@ -236,15 +235,7 @@ func doExecWithNestedList(sqlProxy SqlProxy, stmt QueryStatement, args []interfa
 }
 
 func execWithNestedMap(sqlProxy SqlProxy, stmt QueryStatement, args []interface{}) (sql.Result, error) {
-	executed, result, err := doExecWithNestedMap(sqlProxy, stmt, args)
-	if err != nil && err == driver.ErrBadConn {
-		var nextResult ExecMultiResult
-		_, nextResult, err = doExecWithNestedMap(sqlProxy, stmt, args[executed:])
-		if err == nil {
-			result.idList = append(result.idList, nextResult.idList...)
-			result.rowAffected += nextResult.rowAffected
-		}
-	}
+	_, result, err := doExecWithNestedMap(sqlProxy, stmt, args)
 	return result, err
 }
 
@@ -259,9 +250,10 @@ func doExecWithNestedMap(sqlProxy SqlProxy, stmt QueryStatement, args []interfac
 		}
 	}
 
+	prepareStart := time.Now()
 	pstmt, err := sqlProxy.prepare(stmt.Query)
 	if err != nil {
-		return 0, ExecMultiResult{}, err
+		return 0, ExecMultiResult{}, wrapQueryError(stmt.Id, "prepare", prepareStart, err)
 	}
 	defer pstmt.Close()
 
@@ -290,9 +282,9 @@ func doExecWithNestedMap(sqlProxy SqlProxy, stmt QueryStatement, args []interfac
 		}
 
 		start := time.Now()
-		res, err := pstmt.Exec(param...)
+		res, err := pstmt.ExecContext(proxyContext(sqlProxy), param...)
 		if err != nil {
-			return i, result, err
+			return i, result, wrapQueryError(stmt.Id, "exec", start, err)
 		}
 		sqlProxy.recordExcution(stmt.Id, start)
 		affectedCount, _ := res.RowsAffected()
@@ -311,22 +303,15 @@ func doExecWithNestedMap(sqlProxy SqlProxy, stmt QueryStatement, args []interfac
 }
 
 func execWithStructList(sqlProxy SqlProxy, stmt QueryStatement, args []interface{}) (sql.Result, error) {
-	executed, result, err := doExecWithStructList(sqlProxy, stmt, args)
-	if err != nil && err == driver.ErrBadConn {
-		var nextResult ExecMultiResult
-		_, nextResult, err = doExecWithStructList(sqlProxy, stmt, args[executed:])
-		if err == nil {
-			result.idList = append(result.idList, nextResult.idList...)
-			result.rowAffected += nextResult.rowAffected
-		}
-	}
+	_, result, err := doExecWithStructList(sqlProxy, stmt, args)
 	return result, err
 }
 
 func doExecWithStructList(sqlProxy SqlProxy, stmt QueryStatement, args []interface{}) (int, ExecMultiResult, error) {
+	prepareStart := time.Now()
 	pstmt, err := sqlProxy.prepare(stmt.Query)
 	if err != nil {
-		return 0, ExecMultiResult{}, err
+		return 0, ExecMultiResult{}, wrapQueryError(stmt.Id, "prepare", prepareStart, err)
 	}
 	defer pstmt.Close()
 
@@ -363,9 +348,9 @@ func doExecWithStructList(sqlProxy SqlProxy, stmt QueryStatement, args []interfa
 		}
 
 		start := time.Now()
-		res, err := pstmt.Exec(param...)
+		res, err := pstmt.ExecContext(proxyContext(sqlProxy), param...)
 		if err != nil {
-			return i, result, err
+			return i, result, wrapQueryError(stmt.Id, "exec", start, err)
 		}
 		sqlProxy.recordExcution(stmt.Id, start)
 		affectedCount, _ := res.RowsAffected()
@@ -428,14 +413,15 @@ func queryMultiRow(sqlProxy SqlProxy, stmt QueryStatement, v ...interface{}) (qu
 	}
 
 	if len(v) == 0 {
-		rows, err := sqlProxy.query(execStmt.Query)
 		if sqlProxy.debugEnabled() {
 			sqlProxy.debugPrint("%s", stmt.Debug())
 		}
+		start := time.Now()
+		rows, err := sqlProxy.query(execStmt.Query)
 		if err != nil {
-			return newQueryResultError(err)
+			return newQueryResultError(wrapQueryError(stmt.Id, "query", start, err))
 		}
-		return newQueryResult(nil, rows)
+		return newQueryResult(nil, rows, stmt.Id, start)
 	}
 
 	defer func() {
@@ -547,14 +533,15 @@ func queryWithList(sqlProxy SqlProxy, stmt QueryStatement, args []interface{}) *
 		sqlProxy.recordExcution(stmt.Id, start)
 	}()
 
-	rows, err := sqlProxy.query(effectiveQuery, param...)
+	// 쿼리가 timeout 등으로 블록되어도 어떤 쿼리가 나갔는지 즉시 로깅하도록 실행 전에 출력한다
 	if sqlProxy.debugEnabled() {
 		sqlProxy.debugPrint("%s", stmt.Debug(param...))
 	}
+	rows, err := sqlProxy.query(effectiveQuery, param...)
 	if err != nil {
-		return newQueryResultError(err)
+		return newQueryResultError(wrapQueryError(stmt.Id, "query", start, err))
 	}
-	return newQueryResult(nil, rows)
+	return newQueryResult(nil, rows, stmt.Id, start)
 }
 
 func queryWithObject(sqlProxy SqlProxy, stmt QueryStatement, parameter interface{}) *QueryResult {
@@ -741,14 +728,15 @@ func queryWithMap(sqlProxy SqlProxy, stmt QueryStatement, m map[string]interface
 		sqlProxy.recordExcution(stmt.Id, start)
 	}()
 
-	rows, err := sqlProxy.query(effectiveQuery, param...)
+	// 쿼리가 timeout 등으로 블록되어도 어떤 쿼리가 나갔는지 즉시 로깅하도록 실행 전에 출력한다
 	if sqlProxy.debugEnabled() {
 		sqlProxy.debugPrint("%s", stmt.Debug(param...))
 	}
+	rows, err := sqlProxy.query(effectiveQuery, param...)
 	if err != nil {
-		return newQueryResultError(err)
+		return newQueryResultError(wrapQueryError(stmt.Id, "query", start, err))
 	}
-	return newQueryResult(nil, rows)
+	return newQueryResult(nil, rows, stmt.Id, start)
 }
 
 func queryMap(sqlProxy SqlProxy, val interface{}, stmt QueryStatement) *QueryResult {

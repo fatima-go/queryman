@@ -21,6 +21,7 @@
 package queryman
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"runtime"
@@ -99,11 +100,11 @@ func (man *QueryMan) Close() error {
 }
 
 func (man *QueryMan) exec(query string, args ...interface{}) (sql.Result, error) {
-	return man.db.Exec(query, args...)
+	return man.execContext(context.Background(), query, args...)
 }
 
 func (man *QueryMan) query(query string, args ...interface{}) (*sql.Rows, error) {
-	return man.db.Query(query, args...)
+	return man.queryContext(context.Background(), query, args...)
 }
 
 func (man *QueryMan) queryRow(query string, args ...interface{}) *sql.Row {
@@ -111,7 +112,19 @@ func (man *QueryMan) queryRow(query string, args ...interface{}) *sql.Row {
 }
 
 func (man *QueryMan) prepare(query string) (*sql.Stmt, error) {
-	return man.db.Prepare(query)
+	return man.prepareContext(context.Background(), query)
+}
+
+func (man *QueryMan) execContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+	return man.db.ExecContext(ctx, query, args...)
+}
+
+func (man *QueryMan) queryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+	return man.db.QueryContext(ctx, query, args...)
+}
+
+func (man *QueryMan) prepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
+	return man.db.PrepareContext(ctx, query)
 }
 
 func (man *QueryMan) isTransaction() bool {
@@ -265,7 +278,80 @@ func (man *QueryMan) QueryRowWithStmt(stmtIdOrUserQuery string, v ...interface{}
 		queryResult.Close()
 		queryRowResult = newQueryRowResultError(queryResult.err)
 	} else {
-		queryRowResult = newQueryRowResult(queryResult.pstmt, queryResult.rows)
+		queryRowResult = newQueryRowResult(queryResult.pstmt, queryResult.rows, queryResult.stmtId, queryResult.start)
+	}
+
+	queryResult.pstmt = nil
+	queryResult.rows = nil
+	queryRowResult.fieldNameConverter = man.fieldNameConverter
+	return queryRowResult
+}
+
+// ExecuteContext Execute의 context 전달 변형. ctx deadline을 DSN readTimeout보다 짧게
+// 설정하면 호출자가 context.DeadlineExceeded로 timeout을 확정 구분할 수 있다.
+func (man *QueryMan) ExecuteContext(ctx context.Context, v ...interface{}) (sql.Result, error) {
+	pc, _, _, _ := runtime.Caller(1)
+	funcName := findFunctionName(pc)
+	return man.ExecuteWithStmtContext(ctx, funcName, v...)
+}
+
+func (man *QueryMan) ExecuteWithStmtContext(ctx context.Context, stmtIdOrUserQuery string, v ...interface{}) (sql.Result, error) {
+	stmt, err := man.find(stmtIdOrUserQuery)
+	if err != nil {
+		return nil, err
+	}
+
+	if stmt.eleType != eleTypeInsert && stmt.eleType != eleTypeUpdate {
+		return nil, ErrExecutionInvalidSqlType
+	}
+
+	return execute(newContextBoundProxy(man, ctx), stmt, v...)
+}
+
+func (man *QueryMan) QueryContext(ctx context.Context, v ...interface{}) *QueryResult {
+	pc, _, _, _ := runtime.Caller(1)
+	funcName := findFunctionName(pc)
+	return man.QueryWithStmtContext(ctx, funcName, v...)
+}
+
+func (man *QueryMan) QueryWithStmtContext(ctx context.Context, stmtIdOrUserQuery string, v ...interface{}) *QueryResult {
+	stmt, err := man.find(stmtIdOrUserQuery)
+	if err != nil {
+		return newQueryResultError(err)
+	}
+
+	if stmt.eleType != eleTypeSelect {
+		return newQueryResultError(ErrQueryInvalidSqlType)
+	}
+
+	queryedRow := queryMultiRow(newContextBoundProxy(man, ctx), stmt, v...)
+	queryedRow.fieldNameConverter = man.fieldNameConverter
+	return queryedRow
+}
+
+func (man *QueryMan) QueryRowContext(ctx context.Context, v ...interface{}) *QueryRowResult {
+	pc, _, _, _ := runtime.Caller(1)
+	funcName := findFunctionName(pc)
+	return man.QueryRowWithStmtContext(ctx, funcName, v...)
+}
+
+func (man *QueryMan) QueryRowWithStmtContext(ctx context.Context, stmtIdOrUserQuery string, v ...interface{}) *QueryRowResult {
+	stmt, err := man.find(stmtIdOrUserQuery)
+	if err != nil {
+		return newQueryRowResultError(err)
+	}
+
+	if stmt.eleType != eleTypeSelect {
+		return newQueryRowResultError(ErrQueryInvalidSqlType)
+	}
+
+	var queryRowResult *QueryRowResult
+	queryResult := queryMultiRow(newContextBoundProxy(man, ctx), stmt, v...)
+	if queryResult.err != nil {
+		queryResult.Close()
+		queryRowResult = newQueryRowResultError(queryResult.err)
+	} else {
+		queryRowResult = newQueryRowResult(queryResult.pstmt, queryResult.rows, queryResult.stmtId, queryResult.start)
 	}
 
 	queryResult.pstmt = nil
@@ -276,6 +362,18 @@ func (man *QueryMan) QueryRowWithStmt(stmtIdOrUserQuery string, v ...interface{}
 
 func (man *QueryMan) Begin() (*DBTransaction, error) {
 	tx, err := man.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+
+	runtime.SetFinalizer(tx, closeTransaction)
+	return newTransaction(man, tx, man, man.fieldNameConverter), nil
+}
+
+// BeginTx Begin의 context 전달 변형. ctx는 트랜잭션이 닫히거나 커밋/롤백될 때까지
+// 유효해야 하며, ctx가 취소되면 트랜잭션은 롤백된다(database/sql 규약).
+func (man *QueryMan) BeginTx(ctx context.Context) (*DBTransaction, error) {
+	tx, err := man.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
